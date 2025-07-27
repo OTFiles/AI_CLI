@@ -13,6 +13,7 @@ import time
 import datetime
 import requests
 import threading
+import shutil
 
 # 设置本地化以支持中文
 locale.setlocale(locale.LC_ALL, '')
@@ -615,7 +616,7 @@ class ChatUI:
             pass
         
     def display_messages(self):
-        """显示聊天消息 - 修复版本"""
+        """显示聊天消息 - 修复版本，添加自动换行"""
         # 计算消息显示区域
         start_line = 2
         end_line = self.height - 3
@@ -632,12 +633,16 @@ class ChatUI:
         # 显示所有消息（不再使用缓存）
         display_lines = []
         for msg in self.messages:
+            # 跳过系统消息（仅显示用户和AI消息）
+            if msg["role"] == "system":
+                continue
+                
             role = msg["role"]
             content = msg["content"]
             
             # 根据角色设置颜色
             if role == "user":
-                prefix = "你: "
+                prefix = "用户: "
                 color = curses.color_pair(2)
             elif role == "assistant":
                 prefix = "AI: "
@@ -666,25 +671,30 @@ class ChatUI:
                     if placeholder in display_content:
                         display_content = display_content.replace(placeholder, f"{{{{:F{file_path}}}}}")
                 
-                display_lines.append((prefix + display_content, color))
-        
-        # 将消息拆分为行
-        all_lines = []
-        for text, color in display_lines:
-            # 直接添加行，不进行换行计算（性能优化）
-            if len(text) > self.width:
-                text = text[:self.width-4] + "..."
-            all_lines.append((text, color))
+                # 添加前缀
+                display_content = prefix + display_content
+                
+                # 正确处理换行：先按原始换行符分割
+                lines = display_content.split('\n')
+                for line in lines:
+                    # 对每一行进行自动换行处理
+                    wrapped_lines = textwrap.wrap(line, self.width)
+                    if wrapped_lines:
+                        for wrapped_line in wrapped_lines:
+                            display_lines.append((wrapped_line, color))
+                    else:
+                        # 空行
+                        display_lines.append(("", color))
         
         # 显示消息（从底部向上）
-        line_index = len(all_lines) - 1
+        line_index = len(display_lines) - 1
         row = end_line - 1
         
         # 确保不会覆盖输入区域
         max_row = self.height - 4  # 输入区域上方留出空间
         
         while row >= start_line and line_index >= 0 and row >= max_row:
-            line, color = all_lines[line_index]
+            line, color = display_lines[line_index]
             self.safe_addstr(row, 0, line, color)
             row -= 1
             line_index -= 1
@@ -944,6 +954,10 @@ class ChatUI:
             # 在保存前恢复占位符格式
             messages_to_save = []
             for msg in self.messages:
+                # 只保存用户和AI消息，跳过系统消息
+                if msg['role'] == 'system':
+                    continue
+                    
                 if msg['role'] == 'user':
                     content = msg['content']
                     for placeholder, file_path_val in self.file_placeholders.items():
@@ -997,6 +1011,32 @@ class ChatUI:
             self.redraw(force=True)
             return False
         
+        # 添加清理缓存命令
+        elif command.startswith('/clean'):
+            # 确认操作
+            self.add_system_message("确定要清理所有历史记录吗？(y/n)")
+            self.redraw(force=True)
+            
+            # 等待用户确认
+            key = self.stdscr.getch()
+            if key == ord('y') or key == ord('Y'):
+                try:
+                    # 删除历史记录目录
+                    if HISTORY_DIR.exists():
+                        shutil.rmtree(HISTORY_DIR)
+                    
+                    # 重新创建目录
+                    HISTORY_DIR.mkdir(exist_ok=True)
+                    
+                    self.add_system_message("所有历史记录已清理")
+                except Exception as e:
+                    self.add_system_message(f"清理失败: {str(e)}", is_error=True)
+            else:
+                self.add_system_message("清理操作已取消")
+            
+            self.redraw(force=True)
+            return False
+        
         elif command.startswith('/exit') or command.startswith('/quit'):
             return True
         
@@ -1009,7 +1049,9 @@ class ChatUI:
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                self.messages = data.get('messages', [])
+                # 只加载用户和AI消息，不加载系统消息
+                self.messages = [msg for msg in data.get('messages', []) 
+                                 if msg['role'] in ['user', 'assistant']]
                 provider = data.get('provider', 'OpenRouter')
                 model = data.get('model', 'deepseek/deepseek-r1:free')
                 
@@ -1233,15 +1275,26 @@ class ChatUI:
         self.dirty = True  # 标记需要重绘消息区域
         self.redraw(force=True)
         
-        # 构建要发送的消息列表
+        # 构建要发送的消息列表（排除系统消息）
         messages_to_send = []
-        for msg in self.messages[-10:]:  # 只发送最近的10条消息
+        for msg in self.messages:
+            # 只发送用户和AI消息，不发送系统消息
+            if msg["role"] == "system":
+                continue
+                
             if msg["role"] == "user":
                 # 对用户消息中的文件占位符进行替换
                 content = replace_file_tags(msg["content"])
             else:
                 content = msg["content"]
-            messages_to_send.append({"role": msg["role"], "content": content})
+                
+            # 只保留最近的10条消息
+            if len(messages_to_send) < 10:
+                messages_to_send.append({"role": msg["role"], "content": content})
+            else:
+                # 移除最旧的消息
+                messages_to_send.pop(0)
+                messages_to_send.append({"role": msg["role"], "content": content})
         
         # 添加AI消息占位符
         self.messages.append({"role": "assistant", "content": "正在思考..."})
@@ -1271,7 +1324,7 @@ class ChatUI:
         return False
     
     def update_last_message(self):
-        """只更新最后一条消息的显示 - 修复版本"""
+        """只更新最后一条消息的显示 - 修复版本，添加自动换行"""
         # 计算消息显示区域
         start_line = 2
         end_line = self.height - 3
@@ -1280,6 +1333,10 @@ class ChatUI:
         # 计算需要清除的行数（基于最后两条消息的实际行数）
         lines_to_clear = 0
         for msg in self.messages[-2:]:
+            # 跳过系统消息
+            if msg["role"] == "system":
+                continue
+                
             content = msg["content"]
             # 估算行数：内容长度除以终端宽度，加上换行符
             lines_to_clear += max(1, (len(content) // self.width) + 1)
@@ -1294,14 +1351,18 @@ class ChatUI:
             except:
                 pass
         
-        # 只显示最后两条消息
+        # 只显示最后两条消息（排除系统消息）
         display_lines = []
         for msg in self.messages[-2:]:
+            # 跳过系统消息
+            if msg["role"] == "system":
+                continue
+                
             role = msg["role"]
             content = msg["content"]
             
             if role == "user":
-                prefix = "你: "
+                prefix = "用户: "
                 color = curses.color_pair(2)
             elif role == "assistant":
                 prefix = "AI: "
@@ -1331,29 +1392,29 @@ class ChatUI:
                         display_content = display_content.replace(placeholder, f"{{{{:F{file_path}}}}}")
                 
                 # 添加前缀
-                display_lines.append((prefix + display_content, color))
-        
-        # 将消息拆分为适合终端的行
-        wrapped_lines = []
-        for text, color in display_lines:
-            # 拆分长行
-            start = 0
-            while start < len(text):
-                end = start + self.width
-                if end > len(text):
-                    end = len(text)
-                wrapped_lines.append((text[start:end], color))
-                start = end
+                display_content = prefix + display_content
+                
+                # 正确处理换行：先按原始换行符分割
+                lines = display_content.split('\n')
+                for line in lines:
+                    # 对每一行进行自动换行处理
+                    wrapped_lines = textwrap.wrap(line, self.width)
+                    if wrapped_lines:
+                        for wrapped_line in wrapped_lines:
+                            display_lines.append((wrapped_line, color))
+                    else:
+                        # 空行
+                        display_lines.append(("", color))
         
         # 显示消息（从底部向上）
-        line_index = len(wrapped_lines) - 1
+        line_index = len(display_lines) - 1
         row = end_line - 1
         
         # 确保不会覆盖输入区域
         max_row = self.height - 4
         
         while row >= max_row and line_index >= 0:
-            line, color = wrapped_lines[line_index]
+            line, color = display_lines[line_index]
             self.safe_addstr(row, 0, line, color)
             row -= 1
             line_index -= 1
