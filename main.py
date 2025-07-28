@@ -64,7 +64,7 @@ def load_configurations():
         {
             "name": "OpenRouter",
             "api_base": "https://openrouter.ai/api/v1",
-            "api_key": "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",
+            "api_key": "API-KEY",
             "model": "deepseek/deepseek-r1:free",
             "request_type": "openai",
             "headers": {
