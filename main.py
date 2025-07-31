@@ -68,8 +68,8 @@ def load_configurations():
             "model": "deepseek/deepseek-r1:free",
             "request_type": "openai",
             "headers": {
-                "HTTP-Referer": "https://github.com/OTFiles",
-                "X-Title": "Termux Chat"
+                "HTTP-Referer": "https://github.com/YOU-NAME",
+                "X-Title": "Termux Chat" # 或者其它
             },
             "is_infini": False
         }
@@ -563,13 +563,20 @@ class ChatUI:
         self.last_message_count = 0  # 记录上次消息数量
         self.cached_lines = []  # 缓存消息行
         
+        # 命令模式相关属性
+        self.command_mode = False
+        self.command_input = ""
+        self.command_cursor_pos = 0
+        self.saved_input = ""  # 保存进入命令模式前的输入内容
+        self.saved_cursor_pos = 0  # 保存进入命令模式前的光标位置
+        
         # 初始化颜色
         curses.start_color()
         curses.use_default_colors()
         curses.init_pair(1, curses.COLOR_CYAN, -1)    # 标题
-        curses.init_pair(2, curses.COLOR_GREEN, -1)   # 用户输入
-        curses.init_pair(3, curses.COLOR_YELLOW, -1)  # AI输出
-        curses.init_pair(4, curses.COLOR_BLUE, -1)     # 系统消息
+        curses.init_pair(2, curses.COLOR_YELLOW, -1)   # 用户输入
+        curses.init_pair(3, curses.COLOR_BLUE, -1)  # AI输出
+        curses.init_pair(4, curses.COLOR_RED, -1)     # 系统消息
         curses.init_pair(5, curses.COLOR_MAGENTA, -1)  # 文件内容
         curses.init_pair(6, curses.COLOR_RED, -1)      # 错误消息
         curses.init_pair(7, curses.COLOR_BLUE, -1)     # 历史记录标题
@@ -617,8 +624,8 @@ class ChatUI:
         
     def display_messages(self):
         """显示聊天消息 - 修复版本，添加自动换行"""
-        # 计算消息显示区域
-        start_line = 2
+        # 计算消息显示区域 - 从第2行开始（索引2对应第三行）
+        start_line = 2  # 修改为从第三行开始显示消息
         end_line = self.height - 3
         max_lines = end_line - start_line
         
@@ -633,10 +640,6 @@ class ChatUI:
         # 显示所有消息（不再使用缓存）
         display_lines = []
         for msg in self.messages:
-            # 跳过系统消息（仅显示用户和AI消息）
-            if msg["role"] == "system":
-                continue
-                
             role = msg["role"]
             content = msg["content"]
             
@@ -693,7 +696,7 @@ class ChatUI:
         # 确保不会覆盖输入区域
         max_row = self.height - 4  # 输入区域上方留出空间
         
-        while row >= start_line and line_index >= 0 and row >= max_row:
+        while row >= start_line and line_index >= 0 and row <= max_row:
             line, color = display_lines[line_index]
             self.safe_addstr(row, 0, line, color)
             row -= 1
@@ -714,36 +717,48 @@ class ChatUI:
         
         # 输入提示
         prompt = "> "
-        self.safe_addstr(self.height - 2, 0, prompt)
         
-        # 显示输入内容
-        max_input_width = self.width - len(prompt) - 1
-        display_input = self.current_input
-        
-        # 如果输入内容过长，显示尾部部分
-        if len(display_input) > max_input_width:
-            start_idx = max(0, len(self.current_input) - max_input_width)
-            display_input = self.current_input[start_idx:]
-            if start_idx > 0:
-                display_input = "..." + display_input
-        
-        # 显示输入文本
-        self.safe_addstr(self.height - 2, len(prompt), display_input)
-        
-        # 设置光标位置
-        display_pos = max(0, self.cursor_pos - (len(self.current_input) - len(display_input)))
-        if display_input.startswith("..."):
-            display_pos += 3  # 跳过 "..." 前缀
+        if self.command_mode:
+            # 命令模式下的显示
+            self.safe_addstr(self.height - 2, 0, "命令: " + self.command_input)
+            # 设置光标位置
+            cursor_x = len("命令: ") + self.command_cursor_pos
+            try:
+                self.stdscr.move(self.height - 2, cursor_x)
+            except:
+                pass
+        else:
+            # 普通模式下的显示
+            self.safe_addstr(self.height - 2, 0, prompt)
             
-        cursor_x = len(prompt) + min(len(display_input), display_pos)
-        try:
-            self.stdscr.move(self.height - 2, cursor_x)
-        except:
-            pass
+            # 显示输入内容
+            max_input_width = self.width - len(prompt) - 1
+            display_input = self.current_input
+            
+            # 如果输入内容过长，显示尾部部分
+            if len(display_input) > max_input_width:
+                start_idx = max(0, len(self.current_input) - max_input_width)
+                display_input = self.current_input[start_idx:]
+                if start_idx > 0:
+                    display_input = "..." + display_input
+            
+            # 显示输入文本
+            self.safe_addstr(self.height - 2, len(prompt), display_input)
+            
+            # 设置光标位置
+            display_pos = max(0, self.cursor_pos - (len(self.current_input) - len(display_input)))
+            if display_input.startswith("..."):
+                display_pos += 3  # 跳过 "..." 前缀
+                
+            cursor_x = len(prompt) + min(len(display_input), display_pos)
+            try:
+                self.stdscr.move(self.height - 2, cursor_x)
+            except:
+                pass
     
     def display_help(self):
         """显示帮助信息"""
-        help_text = "命令: /file=文件 /provider=切换 /clear=清除 /exit=退出 /save=保存 /load=加载 /history=查看历史"
+        help_text = "命令: Ctrl+L 输入命令 file=文件 provider=切换 clear=清除 exit=退出 save=保存 load=加载 history=查看历史"
         self.safe_addstr(self.height - 1, 0, help_text)
     
     def redraw(self, force=False):
@@ -781,13 +796,19 @@ class ChatUI:
     
     def process_input(self, key):
         """处理用户输入 - 修复后台切换问题"""
+        # 处理命令模式
+        if self.command_mode:
+            return self.process_command_input(key)
+        
         # 处理控制键
         if key == curses.KEY_ENTER or key == 10 or key == 13:
-            # 处理命令或发送消息
-            if self.current_input.startswith('/'):
-                return self.handle_command()
-            else:
-                return self.send_message()
+            # 发送消息
+            return self.send_message()
+        
+        elif key == 12:  # Ctrl+L 进入命令模式
+            self.enter_command_mode()
+            self.redraw_input_only()
+            return False
         
         elif key == curses.KEY_UP:
             # 上一条历史记录
@@ -837,7 +858,7 @@ class ChatUI:
             return False
         
         elif key == 27:  # ESC键
-            return self.handle_command("/exit")
+            return self.handle_command("exit")
         
         else:
             # 处理字符输入（包括中文）
@@ -894,25 +915,145 @@ class ChatUI:
             self.redraw_input_only()
             return False
     
+    def enter_command_mode(self):
+        """进入命令模式"""
+        self.command_mode = True
+        self.saved_input = self.current_input
+        self.saved_cursor_pos = self.cursor_pos
+        self.current_input = ""
+        self.cursor_pos = 0
+        self.command_input = ""
+        self.command_cursor_pos = 0
+    
+    def exit_command_mode(self, restore_input=True):
+        """退出命令模式"""
+        self.command_mode = False
+        if restore_input:
+            self.current_input = self.saved_input
+            self.cursor_pos = self.saved_cursor_pos
+        else:
+            self.current_input = ""
+            self.cursor_pos = 0
+        self.saved_input = ""
+        self.saved_cursor_pos = 0
+    
+    def process_command_input(self, key):
+        """处理命令模式下的输入"""
+        if key == curses.KEY_ENTER or key == 10 or key == 13:
+            # 执行命令
+            self.handle_command(self.command_input)
+            self.exit_command_mode()
+            return False
+        
+        elif key == 27:  # ESC键
+            # 取消命令
+            self.exit_command_mode()
+            self.redraw_input_only()
+            return False
+        
+        elif key == curses.KEY_BACKSPACE or key == 127:
+            # 退格删除
+            if self.command_cursor_pos > 0:
+                # 删除单个字符
+                self.command_input = self.command_input[:self.command_cursor_pos-1] + self.command_input[self.command_cursor_pos:]
+                self.command_cursor_pos -= 1
+            self.redraw_input_only()
+            return False
+        
+        elif key == curses.KEY_LEFT:
+            # 向左移动光标
+            if self.command_cursor_pos > 0:
+                self.command_cursor_pos -= 1
+            self.redraw_input_only()
+            return False
+        
+        elif key == curses.KEY_RIGHT:
+            # 向右移动光标
+            if self.command_cursor_pos < len(self.command_input):
+                self.command_cursor_pos += 1
+            self.redraw_input_only()
+            return False
+        
+        else:
+            # 处理字符输入（包括中文）
+            char = None
+            
+            # 修复：检查按键值是否在有效范围内
+            if key < 0 or key > 0x10FFFF:  # Unicode最大码点
+                # 无效的按键值，忽略
+                return False
+            
+            # 处理多字节字符（如中文）
+            if key > 127:
+                # 收集可能的UTF-8字节序列
+                bytes_seq = [key]
+                self.stdscr.nodelay(True)  # 临时设置非阻塞模式
+                
+                # 尝试读取后续字节（最多2个，因为UTF-8最多4字节，但中文通常是3字节）
+                for _ in range(2):
+                    next_key = self.stdscr.getch()
+                    # 修复：检查按键值是否有效
+                    if next_key != -1 and 0 <= next_key <= 255:
+                        bytes_seq.append(next_key)
+                    else:
+                        break
+                
+                self.stdscr.nodelay(False)  # 恢复阻塞模式
+                
+                # 将字节序列转换为字符串
+                try:
+                    byte_string = bytes(bytes_seq)
+                    char = byte_string.decode('utf-8')
+                except UnicodeDecodeError:
+                    # 如果解码失败，只使用第一个字节
+                    try:
+                        char = chr(bytes_seq[0])
+                    except:
+                        char = None
+                except ValueError:
+                    # 处理无效字节值
+                    char = None
+            else:
+                # ASCII字符
+                try:
+                    char = chr(key)
+                except:
+                    char = None
+            
+            if char:
+                # 插入字符到当前位置
+                self.command_input = self.command_input[:self.command_cursor_pos] + char + self.command_input[self.command_cursor_pos:]
+                self.command_cursor_pos += len(char)
+            
+            # 只重绘输入区域
+            self.redraw_input_only()
+            return False
+    
     def handle_command(self, command=None):
         """处理命令"""
-        if not command:
-            command = self.current_input
-        
-        if command.startswith('/file'):
+        if command.startswith('file') or command.startswith('f'):
             selected_file = select_file_tui(self.stdscr)
             if selected_file:
                 # 使用唯一占位符避免自动展开
                 placeholder = f"{{{{:F{selected_file}}}}}"
-                # 替换整个命令为文件占位符
-                self.current_input = placeholder
-                self.cursor_pos = len(placeholder)
+                
+                # 如果当前输入不为空，在末尾添加空格和占位符
+                if self.saved_input:
+                    self.saved_input += " " + placeholder
+                    self.saved_cursor_pos = len(self.saved_input)
+                else:
+                    # 如果输入为空，直接使用占位符
+                    self.saved_input = placeholder
+                    self.saved_cursor_pos = len(placeholder)
+                
                 # 存储占位符信息
                 self.file_placeholders[placeholder] = selected_file
-            self.redraw_input_only()
+                
+                # 重绘输入区域显示占位符
+                self.redraw_input_only()
             return False
         
-        elif command.startswith('/provider'):
+        elif command.startswith('provider') or command.startswith('p'):
             selected_config = select_provider_tui(self.stdscr, self.configs)
             if selected_config:
                 self.current_config = selected_config
@@ -920,14 +1061,14 @@ class ChatUI:
             self.redraw(force=True)
             return False
         
-        elif command.startswith('/clear'):
+        elif command.startswith('clear') or command.startswith('cr'):
             self.messages = []
             self.file_placeholders = {}  # 清除占位符
             self.add_system_message("对话历史已清除")
             self.redraw(force=True)
             return False
         
-        elif command.startswith('/save'):
+        elif command.startswith('save') or command.startswith('s'):
             # 获取文件名（如果有）
             parts = command.split(' ', 1)
             filename = parts[1] if len(parts) > 1 else None
@@ -984,7 +1125,7 @@ class ChatUI:
             self.redraw(force=True)
             return False
         
-        elif command.startswith('/load'):
+        elif command.startswith('load') or command.startswith('l'):
             # 获取文件名（如果有）
             parts = command.split(' ', 1)
             filename = parts[1] if len(parts) > 1 else None
@@ -1005,14 +1146,14 @@ class ChatUI:
             self.redraw(force=True)
             return False
         
-        elif command.startswith('/history'):
+        elif command.startswith('history') or command.startswith('h'):
             # 进入历史记录查看界面
             view_history_tui(self.stdscr)
             self.redraw(force=True)
             return False
         
         # 添加清理缓存命令
-        elif command.startswith('/clean'):
+        elif command.startswith('clean') or command.startswith('cn'):
             # 确认操作
             self.add_system_message("确定要清理所有历史记录吗？(y/n)")
             self.redraw(force=True)
@@ -1037,7 +1178,7 @@ class ChatUI:
             self.redraw(force=True)
             return False
         
-        elif command.startswith('/exit') or command.startswith('/quit'):
+        elif command.startswith('exit') or command.startswith('quit'):
             return True
         
         # 处理未知命令
@@ -1326,7 +1467,7 @@ class ChatUI:
     def update_last_message(self):
         """只更新最后一条消息的显示 - 修复版本，添加自动换行"""
         # 计算消息显示区域
-        start_line = 2
+        start_line = 2  # 从第三行开始
         end_line = self.height - 3
         
         # 清除最后两条消息的区域
@@ -1467,8 +1608,8 @@ def chat_ui(stdscr, configs):
     
     # 初始系统消息
     ui.add_system_message("提示：在消息中使用 {{:F文件名}} 自动插入文件内容")
-    ui.add_system_message("输入 /file 选择文件，/provider 切换API，/clear 清除历史，/exit 退出")
-    ui.add_system_message("输入 /save 保存对话，/load 加载对话，/history 查看历史记录")
+    ui.add_system_message("输入 file 选择文件，provider 切换API，clear 清除历史，exit 退出")
+    ui.add_system_message("输入 save 保存对话，load 加载对话，history 查看历史记录")
     
     # 主循环
     while True:
